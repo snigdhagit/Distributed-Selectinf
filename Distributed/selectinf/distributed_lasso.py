@@ -211,11 +211,16 @@ class multisplit_lasso(gaussian_query):
 
         K = self.nsplit
 
-        a = (pi_s ** 2)/(1-pi_s*K)
+        # a = (pi_s ** 2)/(1-pi_s*K)
+        pi_0 = 1 - np.sum(pi_s)
 
-        diag_ = (pi_s + a) * 1./dispersion
+        scaling_matrix = np.diag(pi_s)
+        scaling_matrix += np.outer(pi_s, pi_s) / pi_0
+        scaling_matrix /= dispersion
 
-        off_diag_ = a * 1./dispersion
+        # diag_ = (pi_s + a) * 1./dispersion
+
+        # off_diag_ = a * 1./dispersion
 
         diag_precision_ = np.array([])
 
@@ -223,7 +228,7 @@ class multisplit_lasso(gaussian_query):
 
             ordered_vars = (self.selection_variable[i])['variables']
 
-            D = (self.opt_linear_dict[i])[ordered_vars] * diag_
+            D = (self.opt_linear_dict[i])[ordered_vars] * scaling_matrix[i, i]
 
             signs = (self.selection_variable[i])['sign'][ordered_vars]
             signs[np.isnan(signs)] = 1
@@ -245,9 +250,9 @@ class multisplit_lasso(gaussian_query):
             if r<K-1:
                 cols = np.arange(K-r-1) + (r + 1)
                 for c in cols:
-                    upper_tri_precision = np.hstack((upper_tri_precision, self.signed_XE[r].T.dot(self.signed_XE[c])))
+                    upper_tri_precision = np.hstack((upper_tri_precision, self.signed_XE[r].T.dot(self.signed_XE[c]) * scaling_matrix[r, c])) 
 
-            upper_tri_precision *= off_diag_
+            # upper_tri_precision *= off_diag_
 
             if r == 0:
                 off_diag_precision = upper_tri_precision
@@ -260,7 +265,7 @@ class multisplit_lasso(gaussian_query):
 
         cond_cov = np.linalg.inv(cond_precision)  # \Gamma
 
-        B_ = []
+        # B_ = []
 
         for i in range(K):
 
@@ -274,15 +279,17 @@ class multisplit_lasso(gaussian_query):
             R_[:, ordered_vars] = np.identity(len(ordered_vars)) * signs[None, :]
             #print("Assignment ", R_)
             if i == 0:
-                regress_opt_= R_
+                regress_opt_= pi_s[i] * R_
+                B_ = pi_s[i] * R_
             else:
-                regress_opt_ = np.vstack((regress_opt_, R_))
+                regress_opt_ = np.vstack((regress_opt_, pi_s[i] * R_))
+                B_ = block_diag(B_, pi_s[i] * R_)
 
-            B_ = block_diag(B_, pi_s * R_)
+        # B_ = B_[1:, :]
+        regress_opt_ = np.tile(regress_opt_, K)
+        regress_opt_ = regress_opt_ @ np.diag(np.repeat(pi_s, self.p)) / pi_0
 
-        B_ = B_[1:, :]
-
-        regress_opt = -(cond_cov.dot(B_ + np.tile(regress_opt_, K) * a)) * 1./dispersion
+        regress_opt = -(cond_cov.dot(B_ + regress_opt_)) * 1./dispersion
 
         #print("Regress Opt ", cond_cov/dispersion, B_ + np.tile(regress_opt_, K) * a, regress_opt)
 
@@ -290,11 +297,12 @@ class multisplit_lasso(gaussian_query):
 
         #print("Cond mean ", cond_mean)
 
-        I_ = np.tile(np.identity(self.p), [K,K]) * a + np.kron(np.eye(K), np.identity(self.p)) * pi_s
+        # I_ = np.tile(np.identity(self.p), [K,K]) * a + np.kron(np.eye(K), np.identity(self.p)) * pi_s
+        I_ = np.kron(np.outer(pi_s, pi_s) / pi_0, np.eye(self.p)) + np.kron(np.diag(pi_s), np.eye(self.p))  # TODO: check
 
         prod_score_prec_unnorm = I_ * 1./dispersion
 
-        U = (np.identity(K) * 1./pi_s) - np.ones((K,K))
+        U = np.diag([1. / pi for pi in pi_s]) - np.ones((K,K))
 
         cov_rand = np.kron(U, self._unscaled_cov_score) * dispersion
 
@@ -324,7 +332,7 @@ class multisplit_lasso(gaussian_query):
         if not hasattr(self, "_selection_idx"):
 
             if self.nsplit == 1:
-                pi_s = self.proportion
+                pi_s = self.proportion[0]
                 self._selection_idx = np.zeros((self.n,1), np.bool)
                 (self._selection_idx[:, 0])[:int(pi_s * self.n)] = True
                 np.random.shuffle(self._selection_idx[:,0])
@@ -332,25 +340,24 @@ class multisplit_lasso(gaussian_query):
             else:
                 _selection_idx = np.zeros((self.n, self.nsplit), np.bool)
 
-                nsize = int(self.proportion * self.n)
+                nsize = [int(prop * self.n) for prop in self.proportion]
 
                 for i in range(self.nsplit):
-                    _start = i * nsize
-                    _stop = (i + 1) * nsize
+                    _start = int(np.sum(nsize[:i]))
+                    _stop = int(np.sum(nsize[:(i+1)]))
                     (_selection_idx[:, i])[_start: _stop] = True
                     self._selection_idx = np.random.permutation(_selection_idx)
-
 
         feature_weights_list = [rr.weighted_l1norm(self.feature_weights[i], lagrange=1.) for i in range(self.nsplit)]
 
         quad = rr.identity_quadratic(0,0,0,0)
 
-        inv_frac = 1 / self.proportion
+        inv_frac = [1. / prop for prop in self.proportion]
 
         randomized_loss_list = [self.loglike.subsample(self._selection_idx[:,i]) for i in range(self.nsplit)]
 
         for i in range(self.nsplit):
-            (randomized_loss_list[i]).coef *= inv_frac
+            (randomized_loss_list[i]).coef *= inv_frac[i]
 
         problem_list = [rr.simple_problem(randomized_loss_list[i], feature_weights_list[i]) for i in range(self.nsplit)]
 
