@@ -146,7 +146,7 @@ class multisplit_lasso(gaussian_query):
 
             omega = -(self.randomized_loss_list[i]).smooth_objective(initial_solns[i, :],'grad') \
                     + self.loglike.smooth_objective(initial_solns[i, :],'grad')
-            print("check K.K.T. Mapping ", i, np.allclose(omega, -X.T.dot(Y) + (opt_linear_dict[i]).dot(self.observed_opt_states[i])+ initial_subgrads[i,:]))
+            # print("check K.K.T. Mapping ", i, np.allclose(omega, -X.T.dot(Y) + (opt_linear_dict[i]).dot(self.observed_opt_states[i])+ initial_subgrads[i,:]))
 
         # now make the constraints and implied gaussian
 
@@ -256,9 +256,9 @@ class multisplit_lasso(gaussian_query):
 
         off_diag_precision_ = off_diag_precision + off_diag_precision.T
 
-        cond_precision = off_diag_precision_ + diag_precision_
+        cond_precision = off_diag_precision_ + diag_precision_  # \Gamma^{-1}
 
-        cond_cov = np.linalg.inv(cond_precision)
+        cond_cov = np.linalg.inv(cond_precision)  # \Gamma
 
         B_ = []
 
@@ -394,7 +394,7 @@ class multisplit_lasso(gaussian_query):
         regress_target_score = np.tile(_regress_target_score, self.nsplit)
 
         #print("check shape of regress_target_score ", regress_target_score.shape)
-        print("Dispersion check", self.dispersion_)
+        # print("Dispersion check", self.dispersion_)
 
         return TargetSpec(observed_target,
                           cov_target * self.dispersion_,
