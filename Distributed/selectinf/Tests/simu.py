@@ -71,13 +71,15 @@ def test(seedn,
         nK = 3
 
         feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
-        proportion = [1 / 2, 1 / 3]
+        # proportion = [1 / 2, 1 / 3]
+        proportion = .3
 
         selector = L.gaussian(X,
                               Y,
                               feature_weights,
                               proportion,
-                              estimate_dispersion=True)
+                              estimate_dispersion=True,
+                              sample_with_replacement=True)
 
         signs = selector.fit()
         nonzero = signs != 0
@@ -159,7 +161,7 @@ def main(nsim=500):
         
     root_dir = 'Distributed/selectinf/Tests/results'
     os.makedirs(root_dir, exist_ok=True)
-    df.to_csv(os.path.join(root_dir, 'results.csv'))
+    df.to_csv(os.path.join(root_dir, 'results_with_replace.csv'))
 
 if __name__ == "__main__":
     main(nsim=500)

@@ -27,7 +27,8 @@ class multisplit_lasso(gaussian_query):
                  proportion,
                  nsamples,
                  nfeatures,
-                 estimate_dispersion=True):
+                 estimate_dispersion=True,
+                 sample_with_replacement=False):
 
         self.loglike = loglike
 
@@ -42,6 +43,10 @@ class multisplit_lasso(gaussian_query):
         self.p = nfeatures
 
         self.estimate_dispersion = estimate_dispersion
+
+        self.sample_with_replacement = sample_with_replacement
+        if sample_with_replacement:
+            self.proportion = [proportion] * self.nsplit
 
     def fit(self,
             solve_args={'tol': 1.e-12, 'min_its': 50},
@@ -206,16 +211,20 @@ class multisplit_lasso(gaussian_query):
                                 opt_linear,
                                 observed_subgrad,
                                 dispersion=1):
-
+        
         pi_s = self.proportion
 
         K = self.nsplit
 
         # a = (pi_s ** 2)/(1-pi_s*K)
-        pi_0 = 1 - np.sum(pi_s)
+        if not self.sample_with_replacement:
+            pi_0 = 1 - np.sum(pi_s)
 
-        scaling_matrix = np.diag(pi_s)
-        scaling_matrix += np.outer(pi_s, pi_s) / pi_0
+            scaling_matrix = np.diag(pi_s)
+            scaling_matrix += np.outer(pi_s, pi_s) / pi_0
+        else:
+            scaling_matrix = np.diag([pi / (1 - pi) for pi in pi_s])
+
         scaling_matrix /= dispersion
 
         # diag_ = (pi_s + a) * 1./dispersion
@@ -267,29 +276,47 @@ class multisplit_lasso(gaussian_query):
 
         # B_ = []
 
-        for i in range(K):
+        if not self.sample_with_replacement:
+            for i in range(K):
 
-            ordered_vars = (self.selection_variable[i])['variables']
+                ordered_vars = (self.selection_variable[i])['variables']
 
-            signs = (self.selection_variable[i])['sign'][ordered_vars]
-            signs[np.isnan(signs)] = 1
+                signs = (self.selection_variable[i])['sign'][ordered_vars]
+                signs[np.isnan(signs)] = 1
 
-            R_ = np.zeros((len(ordered_vars), self.p))
+                R_ = np.zeros((len(ordered_vars), self.p))
 
-            R_[:, ordered_vars] = np.identity(len(ordered_vars)) * signs[None, :]
-            #print("Assignment ", R_)
-            if i == 0:
-                regress_opt_= pi_s[i] * R_
-                B_ = pi_s[i] * R_
-            else:
-                regress_opt_ = np.vstack((regress_opt_, pi_s[i] * R_))
-                B_ = block_diag(B_, pi_s[i] * R_)
+                R_[:, ordered_vars] = np.identity(len(ordered_vars)) * signs[None, :]
+                #print("Assignment ", R_)
+                if i == 0:
+                    regress_opt_= pi_s[i] * R_
+                    B_ = pi_s[i] * R_
+                else:
+                    regress_opt_ = np.vstack((regress_opt_, pi_s[i] * R_))
+                    B_ = block_diag(B_, pi_s[i] * R_)
 
-        # B_ = B_[1:, :]
-        regress_opt_ = np.tile(regress_opt_, K)
-        regress_opt_ = regress_opt_ @ np.diag(np.repeat(pi_s, self.p)) / pi_0
+            # B_ = B_[1:, :]
+            regress_opt_ = np.tile(regress_opt_, K)
+            regress_opt_ = regress_opt_ @ np.diag(np.repeat(pi_s, self.p)) / pi_0
 
-        regress_opt = -(cond_cov.dot(B_ + regress_opt_)) * 1./dispersion
+        else:
+            for i in range(K):
+
+                ordered_vars = (self.selection_variable[i])['variables']
+
+                signs = (self.selection_variable[i])['sign'][ordered_vars]
+                signs[np.isnan(signs)] = 1
+
+                R_ = np.zeros((len(ordered_vars), self.p))
+
+                R_[:, ordered_vars] = np.identity(len(ordered_vars)) * signs[None, :]
+                #print("Assignment ", R_)
+                if i == 0:
+                    B_ = pi_s[i] / (1 - pi_s[i]) * R_
+                else:
+                    B_ = block_diag(B_, pi_s[i] / (1 - pi_s[i]) * R_)
+
+        regress_opt = -(cond_cov.dot(B_)) * 1./dispersion
 
         #print("Regress Opt ", cond_cov/dispersion, B_ + np.tile(regress_opt_, K) * a, regress_opt)
 
@@ -298,11 +325,20 @@ class multisplit_lasso(gaussian_query):
         #print("Cond mean ", cond_mean)
 
         # I_ = np.tile(np.identity(self.p), [K,K]) * a + np.kron(np.eye(K), np.identity(self.p)) * pi_s
-        I_ = np.kron(np.outer(pi_s, pi_s) / pi_0, np.eye(self.p)) + np.kron(np.diag(pi_s), np.eye(self.p))  # TODO: check
+        # TODO: check
+        if not self.sample_with_replacement:
+            I_ = np.kron(np.outer(pi_s, pi_s) / pi_0, np.eye(self.p)) + np.kron(np.diag(pi_s), np.eye(self.p))  
+        else:
+            I_ = np.kron(np.diag([pi / (1 - pi) for pi in pi_s]), np.eye(self.p))
 
         prod_score_prec_unnorm = I_ * 1./dispersion
 
-        U = np.diag([1. / pi for pi in pi_s]) - np.ones((K,K))
+        U = np.diag([1. / pi for pi in pi_s]) 
+        if self.sample_with_replacement:
+            U = U - np.eye(K)
+        else:
+            U = U - np.ones((K,K))
+        
 
         cov_rand = np.kron(U, self._unscaled_cov_score) * dispersion
 
@@ -339,14 +375,18 @@ class multisplit_lasso(gaussian_query):
 
             else:
                 _selection_idx = np.zeros((self.n, self.nsplit), np.bool)
-
+    
                 nsize = [int(prop * self.n) for prop in self.proportion]
 
                 for i in range(self.nsplit):
-                    _start = int(np.sum(nsize[:i]))
-                    _stop = int(np.sum(nsize[:(i+1)]))
-                    (_selection_idx[:, i])[_start: _stop] = True
-                    self._selection_idx = np.random.permutation(_selection_idx)
+                    if self.sample_with_replacement:
+                        idx = np.random.choice(self.n, nsize[i], replace=False)
+                        _selection_idx[:, i][idx] = True
+                    else:
+                        _start = int(np.sum(nsize[:i]))
+                        _stop = int(np.sum(nsize[:(i+1)]))
+                        (_selection_idx[:, i])[_start: _stop] = True
+                self._selection_idx = np.random.permutation(_selection_idx)
 
         feature_weights_list = [rr.weighted_l1norm(self.feature_weights[i], lagrange=1.) for i in range(self.nsplit)]
 
@@ -415,7 +455,8 @@ class multisplit_lasso(gaussian_query):
                  proportion,
                  sigma=1.,
                  quadratic=None,
-                 estimate_dispersion=True):
+                 estimate_dispersion=True,
+                 sample_with_replacement=False):
 
         loglike = rr.glm.gaussian(X,
                                   Y,
@@ -430,6 +471,7 @@ class multisplit_lasso(gaussian_query):
                                 proportion,
                                 nsamples,
                                 nfeatures,
-                                estimate_dispersion=estimate_dispersion)
+                                estimate_dispersion=estimate_dispersion,
+                                sample_with_replacement=sample_with_replacement)
 
 
