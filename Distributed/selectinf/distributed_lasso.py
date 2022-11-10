@@ -298,7 +298,7 @@ class multisplit_lasso(gaussian_query):
             # B_ = B_[1:, :]
             regress_opt_ = np.tile(regress_opt_, K)
             regress_opt_ = regress_opt_ @ np.diag(np.repeat(pi_s, self.p)) / pi_0
-
+            regress_opt = -(cond_cov.dot(B_ + regress_opt_)) * 1./dispersion
         else:
             for i in range(K):
 
@@ -316,7 +316,7 @@ class multisplit_lasso(gaussian_query):
                 else:
                     B_ = block_diag(B_, pi_s[i] / (1 - pi_s[i]) * R_)
 
-        regress_opt = -(cond_cov.dot(B_)) * 1./dispersion
+            regress_opt = -(cond_cov.dot(B_)) * 1./dispersion
 
         #print("Regress Opt ", cond_cov/dispersion, B_ + np.tile(regress_opt_, K) * a, regress_opt)
 
