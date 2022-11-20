@@ -31,6 +31,7 @@ def test(seedn,
 
         idx = np.arange(p)
         n, p = X.shape
+        print("check column norms ", np.diag(X.T.dot(X)))
 
         sigma_ = np.std(Y)
 
