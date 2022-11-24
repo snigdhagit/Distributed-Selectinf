@@ -114,6 +114,10 @@ class multisplit_lasso(gaussian_query):
 
         X, Y = self.loglike.data
 
+        linpred = X.dot(beta_bar)
+
+        W_ = self.loglike.saturated_loss.hessian(linpred)
+
         observed_subgrad = []
 
         signed_XE = {}
@@ -131,7 +135,18 @@ class multisplit_lasso(gaussian_query):
             if np.sum(active[:, i]) == 0:
                 _opt_hessian = 0
             else:
-                hess_active = X.T.dot(X[:, active[:, i]])
+
+                beta_unpen = restricted_estimator(self.loglike,
+                                                  active[:, i],
+                                                  solve_args=solve_args)
+
+                beta_hat = np.zeros(self.p)
+                beta_hat[active[:, i]] = beta_unpen
+                _, hess_active, _ = _compute_hessian(self.loglike,
+                                                     beta_hat,
+                                                     active[:, i],
+                                                     unpenalized)
+
                 _opt_hessian = hess_active * (active_signs[:, i])[None, active[:, i]]
 
             _opt_linear[:, scaling_slice] = _opt_hessian
@@ -140,6 +155,7 @@ class multisplit_lasso(gaussian_query):
 
             observed_subgrad.append(initial_subgrads[i,:])
 
+            ###use of signed XE
             signed_XE[i] = X[:, active[:, i]].dot(np.diag(active_signs[:, i][active[:, i]]))
 
         opt_linear = opt_linear[1:, :]
@@ -192,6 +208,8 @@ class multisplit_lasso(gaussian_query):
 
         self.overall = overall
 
+        self.W_ = W_
+
         return overall
 
     def setup_inference(self,
@@ -206,6 +224,8 @@ class multisplit_lasso(gaussian_query):
             else:
                 self._setup_sampler(*self._setup_sampler_data,
                                     dispersion=dispersion)
+
+                self.dispersion_ = dispersion
 
     def _setup_implied_gaussian(self,
                                 opt_linear,
@@ -259,7 +279,7 @@ class multisplit_lasso(gaussian_query):
             if r<K-1:
                 cols = np.arange(K-r-1) + (r + 1)
                 for c in cols:
-                    upper_tri_precision = np.hstack((upper_tri_precision, self.signed_XE[r].T.dot(self.signed_XE[c]) * scaling_matrix[r, c])) 
+                    upper_tri_precision = np.hstack((upper_tri_precision, self.signed_XE[r].T.dot(np.diag(self.W_)).dot(self.signed_XE[c]) * scaling_matrix[r, c]))
 
             # upper_tri_precision *= off_diag_
 
@@ -461,6 +481,32 @@ class multisplit_lasso(gaussian_query):
         loglike = rr.glm.gaussian(X,
                                   Y,
                                   coef=1. / sigma ** 2,
+                                  quadratic=quadratic)
+
+        nsamples = X.shape[0]
+        nfeatures = X.shape[1]
+
+        return multisplit_lasso(loglike,
+                                feature_weights,
+                                proportion,
+                                nsamples,
+                                nfeatures,
+                                estimate_dispersion=estimate_dispersion,
+                                sample_with_replacement=sample_with_replacement)
+
+    @staticmethod
+    def logistic(X,
+                 Y,
+                 feature_weights,
+                 proportion,
+                 trials=None,
+                 quadratic=None,
+                 estimate_dispersion=False,
+                 sample_with_replacement=False):
+
+        loglike = rr.glm.logistic(X,
+                                  Y,
+                                  trials=trials,
                                   quadratic=quadratic)
 
         nsamples = X.shape[0]
