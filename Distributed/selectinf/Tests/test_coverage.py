@@ -26,7 +26,7 @@ def solve_target_restricted(linpred, X, active):
 def test(seedn,
          n=1000,
          p=500,
-         signal_fac=1.2,
+         signal_fac=0.5,
          s=5,
          sigma=1.,
          rho=0.9,
@@ -54,9 +54,9 @@ def test(seedn,
 
             sigma_ = np.std(Y)
 
-            nK = 10
+            nK = 20
 
-            feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
+            feature_weights = {i: 2* np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
             proportion = np.ones(nK - 1)
             proportion /= nK
 
@@ -79,7 +79,7 @@ def test(seedn,
 
             linpred = X.dot(beta)
 
-            nK = 10
+            nK = 20
             sigma_ = 1
 
             feature_weights = {i: 0.8* np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
@@ -133,7 +133,7 @@ def main(nsim=500):
         coverage, length = test(seedn=i,
                                 n=10000,
                                 p=100,
-                                Gaussian= False)
+                                Gaussian= True)
 
         cover_.extend(coverage)
         len_.extend(length)
