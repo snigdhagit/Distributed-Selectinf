@@ -4,13 +4,28 @@ from scipy.stats import norm
 from collections import namedtuple
 import os
 from ..distributed_lasso import multisplit_lasso as L
-from ..Tests.instance import gaussian_instance
+from ..Tests.instance import gaussian_instance, logistic_instance
 from .metrics import get_metrics
 import argparse
 import pickle
 import logging
 import itertools
+import regreg.api as rr
+from ..Utils.base import restricted_estimator
 
+def solve_target_restricted(linpred, X, active):
+
+    def pi(x):
+        return 1 / (1 + np.exp(-x))
+
+    Y_mean = pi(linpred)
+    n = X.shape[0]
+
+    loglike = rr.glm.logistic(X, successes=Y_mean, trials=np.ones(n))
+
+    _beta_unpenalized = restricted_estimator(loglike,
+                                             active)
+    return _beta_unpenalized
 
 def run(seedn,
         n=1000,
@@ -23,44 +38,55 @@ def run(seedn,
         proportion=None,
         level=0.9,
         weight_fac=1.,
+        logistic=False,
         sample_with_replacement=False,
         targets='selected'):
     np.random.seed(seedn)
-    inst = gaussian_instance
+    
     coverages = {}  # cover the target beta in selected/saturated view
     lengths = {}
     metrics = {}
 
     signal = np.sqrt(signal_fac * 2 * np.log(p))
-    X, Y, beta = inst(n=n,
-                        p=p,
-                        signal=signal,
-                        s=s,
-                        equicorrelated=False,
-                        rho=rho,
-                        sigma=sigma,
-                        random_signs=True)[:3]
-    true_signal = beta != 0
-    idx = np.arange(p)
-    n, p = X.shape
-
-    sigma_ = np.std(Y)
-
-    if n > (2 * p):
-        full_dispersion = np.linalg.norm(Y - X.dot(np.linalg.pinv(X).dot(Y))) ** 2 / (n - p)
+    if not logistic:
+        inst = gaussian_instance
+        X, Y, beta = inst(n=n,
+                            p=p,
+                            signal=signal,
+                            s=s,
+                            equicorrelated=False,
+                            rho=rho,
+                            sigma=sigma,
+                            random_signs=True)[:3]
+        n, p = X.shape
+        sigma_ = np.std(Y)
+        feature_weights = {i: 2* np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
+        selector = L.gaussian(X,
+                                Y,
+                                feature_weights,
+                                proportion,
+                                estimate_dispersion=True,
+                                sample_with_replacement=sample_with_replacement)
     else:
-        full_dispersion = sigma_ ** 2
+        inst = logistic_instance
+        X, Y, beta = inst(n=n,
+                              p=p,
+                              signal=signal,
+                              s=s,
+                              equicorrelated=False,
+                              rho=rho,
+                              random_signs=True)[:3]
+        linpred = X.dot(beta)
+        sigma_ = 1
+        feature_weights = {i: 0.8* np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
+        selector = L.logistic(X,
+                                Y,
+                                feature_weights,
+                                proportion)
 
-    feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ * weight_fac for i in range(nK - 1)}
+    true_signal = beta != 0
     if proportion is None:
         proportion = np.ones(nK - 1) / (nK)
-
-    selector = L.gaussian(X,
-                            Y,
-                            feature_weights,
-                            proportion,
-                            estimate_dispersion=True,
-                            sample_with_replacement=sample_with_replacement)
 
     signs = selector.fit()
     nonzero = signs != 0
@@ -68,11 +94,15 @@ def run(seedn,
     # print("dimensions", n, p, nonzero.sum())
     if nonzero.sum() == 0:
         return None, None, None, None
+    print("dimensions", n, p, nonzero.sum())
 
     if nonzero.sum() > 0:
-        beta_target = np.linalg.pinv(X[:, nonzero]).dot(X.dot(beta))  
-
-        selector.setup_inference(dispersion=sigma) # dispersion=sigma
+        if not logistic:
+            beta_target = np.linalg.pinv(X[:, nonzero]).dot(X.dot(beta))  
+            selector.setup_inference(dispersion=None) # dispersion=sigma
+        else:
+            beta_target = solve_target_restricted(linpred, X, selector.overall)
+            selector.setup_inference(dispersion=1.)
 
         target_spec = selector.selected_targets()
 
@@ -120,10 +150,10 @@ def run(seedn,
         return coverages, lengths, metrics, screening
 
 
-def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac):
+def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac, logistic):
     print(f"Starting simulation with K={nK}, n0={n0}, n1={n1}, p={p}, s={s}, signal_fac={signal_fac}, weight_fac={weight_fac}")
-    nsim = 500
-    print_every = 50
+    nsim = 100
+    print_every = 10
     methods = ['dist_carving', 'splitting', 'naive']
     coverages_ = {t: [] for t in methods}
     lengths_ = {t: [] for t in methods}
@@ -136,11 +166,12 @@ def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac):
         proportion = .5
         n = 2000
     else:
-        n = (nK - 1) * n1 + n0
+        n = int((nK - 1) * n1 + n0)
         proportion = np.ones(nK - 1) * (n1 / n)
+        print(n, p, proportion)
 
     for i in range(nsim):
-        coverages, lengths, metrics, screening = run(seedn=i, n=n, p=p, nK=nK, sigma=1., signal_fac=signal_fac, rho=0.5, s=s, proportion=proportion, sample_with_replacement=sample_with_replacement, weight_fac=weight_fac)
+        coverages, lengths, metrics, screening = run(seedn=i, n=n, p=p, nK=nK, sigma=1., signal_fac=signal_fac, rho=0.9, s=s, proportion=proportion, sample_with_replacement=sample_with_replacement, weight_fac=weight_fac, logistic=logistic)
         if coverages is not None:
             methods = coverages.keys()
             [coverages_[key].append(coverages[key]) for key in methods]
@@ -158,6 +189,8 @@ def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac):
     root_dir = 'Distributed/selectinf/simulations/results'
     os.makedirs(root_dir, exist_ok=True)
     filename = f"K_{nK}_n0_{n0}_n1_{n1}_p_{p}_s_{s}_signal_{signal_fac}_weight_{weight_fac}"
+    if logistic:
+        filename += '_logistic'
     if sample_with_replacement:
         filename = os.path.join(root_dir, f'one_pass_with_replace_{filename}.pkl')
     else:
@@ -172,21 +205,26 @@ if __name__ == "__main__":
     parser.add_argument('--w_replace', '-wr', default=False, action='store_true')
     parser.add_argument('--p', default=100, type=int)
     parser.add_argument('--jobid', default=0, type=int)
+    parser.add_argument('--logistic', default=False, action='store_true')
     args = parser.parse_args()
 
-    K_list = [3, 5, 7]
+    n = 10000
+    p = 100
+    
+    # main(args.w_replace, K, n0, n1, p, s=5, signal_fac=.5, weight_fac=2.)
+
+    K_list = [3, 5, 7, 9]
     signals = np.linspace(0.5, 2, num=6)
-    n0_list = [2000, 4000, 6000]
-    s_list = [5, 10, 15]
-    weight_facs = [1.5, 2.]
+    n0_list = [2000]
+    s_list = [5]
+    weight_facs = [1.]
     # len(K_list) * len(signals) * len(n0_list) * len(s_list) * len(weight_facs)
 
     i = 0
-    for nK, signal_fac, n0, s, weight_fac in itertools.product(K_list, signals, n0_list, s_list, weight_facs):
+    for nK, n0, signal_fac, s, weight_fac in itertools.product(K_list, n0_list, signals, s_list, weight_facs):
+        print(nK, signal_fac, s, weight_fac)
         if i == args.jobid:
-            n1 = (10000 - n0) // (nK - 1)  # fix total n to be 10000
-            main(args.w_replace, nK, n0, n1, args.p, s, signal_fac, weight_fac)
+            n1 = (10000 - n0) // (nK - 1)
+            main(args.w_replace, nK, n0, n1, args.p, s, signal_fac, weight_fac, args.logistic)
         i += 1
-
-
 
