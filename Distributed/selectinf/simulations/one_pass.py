@@ -12,6 +12,7 @@ import logging
 import itertools
 import regreg.api as rr
 from ..Utils.base import restricted_estimator
+from sklearn.linear_model import LogisticRegression
 
 def solve_target_restricted(linpred, X, active):
 
@@ -40,7 +41,8 @@ def run(seedn,
         weight_fac=1.,
         logistic=False,
         sample_with_replacement=False,
-        targets='selected'):
+        targets='selected',
+        n_tuning=0):
     np.random.seed(seedn)
     
     coverages = {}  # cover the target beta in selected/saturated view
@@ -50,7 +52,7 @@ def run(seedn,
     signal = np.sqrt(signal_fac * 2 * np.log(p))
     if not logistic:
         inst = gaussian_instance
-        X, Y, beta = inst(n=n,
+        X, Y, beta = inst(n=n+n_tuning,
                             p=p,
                             signal=signal,
                             s=s,
@@ -58,44 +60,77 @@ def run(seedn,
                             rho=rho,
                             sigma=sigma,
                             random_signs=True)[:3]
-        n, p = X.shape
+        if n_tuning > 0:
+            X_tune = X[n:]  # used for tuning lambda
+            Y_tune = Y[n:]
+            X = X[:n]
+            Y = Y[:n]
         sigma_ = np.std(Y)
-        feature_weights = {i: 2* np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
-        selector = L.gaussian(X,
-                                Y,
-                                feature_weights,
-                                proportion,
-                                estimate_dispersion=True,
-                                sample_with_replacement=sample_with_replacement)
+        if n_tuning > 0:
+            weight_facs = np.linspace(.5, 5, 10)
+            min_mse = np.Inf
+            best_weight_fac = .5
+            for weight_fac in weight_facs:
+                feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ * weight_fac for i in range(nK - 1)}
+                selector_ = L.gaussian(X,
+                                        Y,
+                                        feature_weights,
+                                        proportion,
+                                        estimate_dispersion=True,
+                                        sample_with_replacement=sample_with_replacement)
+                signs_ = selector_.fit()
+                mse = np.linalg.norm(Y_tune - X_tune @ selector_._beta_full)**2
+                if mse < min_mse:
+                    min_mse = mse
+                    best_weight_fac = weight_fac
+                    selector = selector_
+                    signs = signs_
+            print(best_weight_fac)
     else:
         inst = logistic_instance
-        X, Y, beta = inst(n=n,
+        X, Y, beta = inst(n=n+n_tuning,
                               p=p,
                               signal=signal,
                               s=s,
                               equicorrelated=False,
                               rho=rho,
                               random_signs=True)[:3]
+        if n_tuning > 0:
+            X_tune = X[n:]  # used for tuning lambda
+            Y_tune = Y[n:]
+            X = X[:n]
+            Y = Y[:n]
         linpred = X.dot(beta)
         sigma_ = 1
-        feature_weights = {i: 0.8* np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * sigma_ for i in range(nK - 1)}
-        selector = L.logistic(X,
-                                Y,
-                                feature_weights,
-                                proportion)
+        feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) for i in range(nK - 1)}
+        selector = L.logistic(X, Y, feature_weights, proportion)
+        if n_tuning > 0:
+            weight_facs = np.linspace(0.1, 1, num=10)
+            max_loglik = -np.Inf
+            best_weight_fac = weight_facs[0]
+            for weight_fac in weight_facs:
+                feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * weight_fac for i in range(nK - 1)}
+                selector_ = L.logistic(X, Y, feature_weights, proportion)
+                signs_ = selector_.fit()
+                pi = X_tune @ selector_._beta_full
+                pi = 1 / (1 + np.exp(-pi))
+                loglik = np.sum(Y_tune * np.log(pi) + (1 - Y_tune) * np.log(1 - pi))
+                if loglik > max_loglik:
+                    max_loglik = loglik
+                    best_weight_fac = weight_fac
+                    selector = selector_
+                    signs = signs_
+            print(best_weight_fac)
 
     true_signal = beta != 0
-    if proportion is None:
-        proportion = np.ones(nK - 1) / (nK)
-
-    signs = selector.fit()
     nonzero = signs != 0
+    print("dimensions", n, p, nonzero.sum())
+
     screening = sum(true_signal * nonzero) == sum(true_signal)
     # print("dimensions", n, p, nonzero.sum())
     if nonzero.sum() == 0:
         return None, None, None, None
-    print("dimensions", n, p, nonzero.sum())
-
+    
     if nonzero.sum() > 0:
         if not logistic:
             beta_target = np.linalg.pinv(X[:, nonzero]).dot(X.dot(beta))  
@@ -127,9 +162,20 @@ def run(seedn,
         holdout_idx = np.sum(selector._selection_idx, 1) == 0
         X_holdout = X[holdout_idx][:, signs]
         Y_holdout = Y[holdout_idx]
-        X_cov = np.linalg.inv(X_holdout.T @ X_holdout)
-        splitting_estimator = X_cov @ X_holdout.T @ Y_holdout
-        sds = np.sqrt(np.diag(X_cov)) * sigma
+        if not logistic:
+            X_cov = np.linalg.inv(X_holdout.T @ X_holdout)
+            splitting_estimator = X_cov @ X_holdout.T @ Y_holdout
+            sds = np.sqrt(np.diag(X_cov)) * sigma
+
+        else:
+            ll = LogisticRegression(fit_intercept=False, penalty='none')
+            ll.fit(X_holdout, Y_holdout)
+            splitting_estimator = ll.coef_.reshape(-1)
+            pi = 1 / (1 + np.exp(-X_holdout @ splitting_estimator))
+            W = np.diag(pi * (1 - pi))
+            hess = X_holdout.T @ W @ X_holdout
+            cov = np.linalg.inv(hess)
+            sds = np.sqrt(np.diag(cov))
     
         coverages['splitting'] = abs(splitting_estimator - beta_target) < sds * norm.ppf(.5 + level / 2)
         lengths['splitting'] = sds * 2 * norm.ppf(.5 + level / 2)
@@ -138,9 +184,20 @@ def run(seedn,
         metrics['splitting'] = get_metrics(beta[nonzero], accept)
 
         # naive intervals
-        X_full_cov = np.linalg.inv(X[:, signs].T @ X[:, signs])
-        full_sds = np.sqrt(np.diag(X_full_cov)) * sigma
-        beta_ols = X_full_cov @ X[:, signs].T @ Y
+        if not logistic:
+            X_full_cov = np.linalg.inv(X[:, signs].T @ X[:, signs])
+            full_sds = np.sqrt(np.diag(X_full_cov)) * sigma
+            beta_ols = X_full_cov @ X[:, signs].T @ Y
+        else:
+            ll = LogisticRegression(fit_intercept=False, penalty='none')
+            ll.fit(X[:, signs], Y)
+            beta_ols = ll.coef_.reshape(-1)
+            pi = 1 / (1 + np.exp(-X[:, signs] @ beta_ols))
+            W = np.diag(pi * (1 - pi))
+            hess = X[:, signs].T @ W @ X[:, signs]
+            cov = np.linalg.inv(hess)
+            full_sds = np.sqrt(np.diag(cov))
+
         coverages['naive'] = abs(beta_ols - beta_target) < full_sds * norm.ppf(.5 + level / 2)
         lengths['naive'] = full_sds * 2 * norm.ppf(.5 + level / 2)
 
@@ -150,10 +207,10 @@ def run(seedn,
         return coverages, lengths, metrics, screening
 
 
-def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac, logistic):
+def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac, logistic, n_tuning=0):
     print(f"Starting simulation with K={nK}, n0={n0}, n1={n1}, p={p}, s={s}, signal_fac={signal_fac}, weight_fac={weight_fac}")
-    nsim = 100
-    print_every = 10
+    nsim = 50
+    print_every = 50
     methods = ['dist_carving', 'splitting', 'naive']
     coverages_ = {t: [] for t in methods}
     lengths_ = {t: [] for t in methods}
@@ -171,7 +228,7 @@ def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac, logi
         print(n, p, proportion)
 
     for i in range(nsim):
-        coverages, lengths, metrics, screening = run(seedn=i, n=n, p=p, nK=nK, sigma=1., signal_fac=signal_fac, rho=0.9, s=s, proportion=proportion, sample_with_replacement=sample_with_replacement, weight_fac=weight_fac, logistic=logistic)
+        coverages, lengths, metrics, screening = run(seedn=i, n=n, p=p, nK=nK, sigma=1., signal_fac=signal_fac, rho=0.9, s=s, proportion=proportion, sample_with_replacement=sample_with_replacement, weight_fac=weight_fac, logistic=logistic, n_tuning=n_tuning)
         if coverages is not None:
             methods = coverages.keys()
             [coverages_[key].append(coverages[key]) for key in methods]
@@ -188,7 +245,10 @@ def main(sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac, logi
         
     root_dir = 'Distributed/selectinf/simulations/results'
     os.makedirs(root_dir, exist_ok=True)
-    filename = f"K_{nK}_n0_{n0}_n1_{n1}_p_{p}_s_{s}_signal_{signal_fac}_weight_{weight_fac}"
+    if n_tuning > 0:
+        filename = f"K_{nK}_n0_{n0}_n1_{n1}_p_{p}_s_{s}_signal_{signal_fac}_ntune_{n_tuning}_nsim_{nsim}"
+    else:
+        filename = f"K_{nK}_n0_{n0}_n1_{n1}_p_{p}_s_{s}_signal_{signal_fac}_weight_{weight_fac}_nsim_{nsim}"
     if logistic:
         filename += '_logistic'
     if sample_with_replacement:
@@ -210,21 +270,21 @@ if __name__ == "__main__":
 
     n = 10000
     p = 100
-    
+    s = 5
+    n0 = 2000
+    weight_fac = 1
     # main(args.w_replace, K, n0, n1, p, s=5, signal_fac=.5, weight_fac=2.)
 
-    K_list = [3, 5, 7, 9]
-    signals = np.linspace(0.5, 2, num=6)
-    n0_list = [2000]
-    s_list = [5]
-    weight_facs = [1.]
+    K_list = [3, 5, 7]
+    # signals = np.linspace(0.5, 2, num=6)
+    signals = np.linspace(0.1, 0.9, 5)
+
     # len(K_list) * len(signals) * len(n0_list) * len(s_list) * len(weight_facs)
 
     i = 0
-    for nK, n0, signal_fac, s, weight_fac in itertools.product(K_list, n0_list, signals, s_list, weight_facs):
-        print(nK, signal_fac, s, weight_fac)
+    for nK, signal_fac in itertools.product(K_list, signals):
         if i == args.jobid:
             n1 = (10000 - n0) // (nK - 1)
-            main(args.w_replace, nK, n0, n1, args.p, s, signal_fac, weight_fac, args.logistic)
+            main(args.w_replace, nK, n0, n1, args.p, s, signal_fac, weight_fac, args.logistic, 1000)
         i += 1
 
