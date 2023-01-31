@@ -50,16 +50,17 @@ class multisplit_lasso(gaussian_query):
 
     def fit(self,
             solve_args={'tol': 1.e-12, 'min_its': 50},
-            perturb=None):
+            perturb=None,
+            thre_agg=0.):
 
         (initial_solns,
          initial_subgrads,
          active,
          active_signs) = self.solve_LASSOs(perturb=perturb,
                                            solve_args=solve_args)
-
+        self.beta_lasso = initial_solns
         _overall = np.sum(active, axis=1)
-        overall = _overall>0
+        overall = _overall>thre_agg
 
         nactive = overall.sum()
 
@@ -444,6 +445,10 @@ class multisplit_lasso(gaussian_query):
         observed_target = restricted_estimator(self.loglike,
                                                self.overall,
                                                solve_args=solve_args)
+        # aggregated MLE
+        # for k in self.nsplit:
+        #     idx = self._selection_idx[:, k]
+        #     ll_k = rr.glm.logistic(X[idx], Y[idx], trials=None, quadratic=None)
 
         Qfeat = self._hessian_active[self.overall]
 
