@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from scipy.stats import t as tdist
-
+from scipy.linalg import block_diag
 _cov_cache = {}
 
 def _design(n, p, rho, equicorrelated):
@@ -30,6 +30,283 @@ def _design(n, p, rho, equicorrelated):
         sigmaX, cholX = AR1(rho=rho, p=p)
         X = np.random.standard_normal((n, p)).dot(cholX.T)
     return X, sigmaX, cholX
+
+
+def gaussian_grouped_instance(n=100,
+                              p=200,
+                              s=7,
+                              sigma=5,
+                              rho=0.,
+                              signal=7,
+                              random_signs=False,
+                              df=np.inf,
+                              scale=True,
+                              center=True,
+                              equicorrelated=True,
+                              n_group=20):
+
+    """
+    A testing instance for the LASSO.
+    If equicorrelated is True design is equi-correlated in the population,
+    normalized to have columns of norm 1.
+    If equicorrelated is False design is auto-regressive.
+    For the default settings, a $\lambda$ of around 13.5
+    corresponds to the theoretical $E(\|X^T\epsilon\|_{\infty})$
+    with $\epsilon \sim N(0, \sigma^2 I)$.
+
+    Parameters
+    ----------
+
+    n : int
+        Sample size
+
+    p : int
+        Number of features
+
+    s : int
+        True sparsity
+
+    sigma : float
+        Noise level
+
+    rho : float
+        Correlation parameter. Must be in interval [0,1] for
+        equicorrelated, [-1,1] for AR(1).
+
+    signal : float or (float, float)
+        Sizes for the coefficients. If a tuple -- then coefficients
+        are equally spaced between these values using np.linspace.
+
+    random_signs : bool
+        If true, assign random signs to coefficients.
+        Else they are all positive.
+
+    df : int
+        Degrees of freedom for noise (from T distribution).
+
+    scale : bool
+        Scale columns of design matrix?
+
+    center : bool
+        Center columns of design matrix?
+
+    equicorrelated : bool
+        Should columns of design be equi-correlated
+        or AR(1)?
+
+    Returns
+    -------
+
+    X : np.float((n,p))
+        Design matrix.
+
+    y : np.float(n)
+        Response vector.
+
+    beta : np.float(p)
+        True coefficients.
+
+    active : np.int(s)
+        Non-zero pattern.
+
+    sigma : float
+        Noise level.
+
+    sigmaX : np.ndarray((p,p))
+        Row covariance.
+
+    Notes
+    -----
+
+    The size of signal is for a "normalized" design, where np.diag(X.T.dot(X)) == np.ones(p).
+    If scale=False, this signal is divided by np.sqrt(n), otherwise it is unchanged.
+
+    """
+
+    sigmaX_ = []
+    group_size = int(p/n_group)
+    groups = np.arange(n_group).repeat(group_size)
+
+    X = np.zeros((n,p))
+    for g in range(n_group):
+
+        if g< n_group-1:
+            _X, _sigmaX = _design(n, group_size, rho, equicorrelated)[:2]
+            sigmaX_ = block_diag(sigmaX_, _sigmaX)
+
+            srt = group_size * g
+            stp = group_size * (g + 1)
+            X[:, srt:stp] = _X
+
+        else:
+            last_group_size = p- (group_size * (n_group-1))
+            _X, _sigmaX = _design(n, last_group_size, rho, equicorrelated)[:2]
+            sigmaX_ = block_diag(sigmaX_, _sigmaX)
+            srt = group_size * g
+            X[:, srt:] = _X
+
+    sigmaX = sigmaX_[1:, :]
+
+    if center:
+        X -= X.mean(0)[None, :]
+
+    beta = np.zeros(p)
+    group_labels = np.unique(groups)
+    group_active = np.random.choice(group_labels, s, replace=False)
+    active = np.isin(groups, group_active)
+
+    signal = np.atleast_1d(signal)
+    beta[active] = signal[0]
+
+    if random_signs:
+        beta[active] *= (2 * np.random.binomial(1, 0.5, size=(active.sum(),)) - 1.)
+
+    np.random.shuffle(beta)
+    beta /= np.sqrt(n)
+
+    if scale:
+        scaling = X.std(0) * np.sqrt(n)
+        X /= scaling[None, :]
+        beta *= np.sqrt(n)
+        sigmaX = sigmaX / np.multiply.outer(scaling, scaling)
+
+    # noise model
+    def _noise(n, df=np.inf):
+        if df == np.inf:
+            return np.random.standard_normal(n)
+        else:
+            sd_t = np.std(tdist.rvs(df, size=50000))
+        return tdist.rvs(df, size=n) / sd_t
+
+    Y = (X.dot(beta) + _noise(n, df)) * sigma
+    return X, Y, beta * sigma, groups, np.nonzero(active)[0], sigma, sigmaX
+
+
+def logistic_grouped_instance(n=100,
+                              p=200,
+                              s=7,
+                              rho=0.3,
+                              signal=14,
+                              random_signs=False,
+                              scale=True,
+                              center=True,
+                              equicorrelated=True,
+                              n_group=20):
+    """
+    A testing instance for the LASSO.
+    Design is equi-correlated in the population,
+    normalized to have columns of norm 1.
+
+    Parameters
+    ----------
+
+    n : int
+        Sample size
+
+    p : int
+        Number of features
+
+    s : int
+        True sparsity
+
+    rho : float
+        Correlation parameter. Must be in interval [0,1] for
+        equicorrelated, [-1,1] for AR(1).
+
+    signal : float or (float, float)
+        Sizes for the coefficients. If a tuple -- then coefficients
+        are equally spaced between these values using np.linspace.
+
+    random_signs : bool
+        If true, assign random signs to coefficients.
+        Else they are all positive.
+
+    scale : bool
+        Scale columns of design matrix?
+
+    center : bool
+        Center columns of design matrix?
+
+    equicorrelated : bool
+        Should columns of design be equi-correlated
+        or AR(1)?
+
+    Returns
+    -------
+
+    X : np.float((n,p))
+        Design matrix.
+
+    y : np.float(n)
+        Response vector.
+
+    beta : np.float(p)
+        True coefficients.
+
+    active : np.int(s)
+        Non-zero pattern.
+
+    sigmaX : np.ndarray((p,p))
+        Row covariance.
+
+    Notes
+    -----
+
+    The size of signal is for a "normalized" design, where np.diag(X.T.dot(X)) == np.ones(p).
+    If scale=False, this signal is divided by np.sqrt(n), otherwise it is unchanged.
+    """
+
+    sigmaX_ = []
+    group_size = int(p/n_group)
+    groups = np.arange(n_group).repeat(group_size)
+
+    X = np.zeros((n, p))
+    if g < n_group - 1:
+        _X, _sigmaX = _design(n, group_size, rho, equicorrelated)[:2]
+        sigmaX_ = block_diag(sigmaX_, _sigmaX)
+
+        srt = group_size * g
+        stp = group_size * (g + 1)
+        X[:, srt:stp] = _X
+
+    else:
+        last_group_size = p - (group_size * (n_group - 1))
+        _X, _sigmaX = _design(n, last_group_size, rho, equicorrelated)[:2]
+        sigmaX_ = block_diag(sigmaX_, _sigmaX)
+        srt = group_size * g
+        X[:, srt:] = _X
+
+    sigmaX = sigmaX_[1:, :]
+
+    if center:
+        X -= X.mean(0)[None, :]
+
+    beta = np.zeros(p)
+    group_labels = np.unique(groups)
+    group_active = np.random.choice(group_labels, s, replace=False)
+    active = np.isin(groups, group_active)
+
+    signal = np.atleast_1d(signal)
+    beta[active] = signal[0]
+
+    if random_signs:
+        beta[active] *= (2 * np.random.binomial(1, 0.5, size=(active.sum(),)) - 1.)
+
+    np.random.shuffle(beta)
+    beta /= np.sqrt(n)
+
+    if scale:
+        scaling = X.std(0) * np.sqrt(n)
+        X /= scaling[None, :]
+        beta *= np.sqrt(n)
+        sigmaX = sigmaX / np.multiply.outer(scaling, scaling)
+
+    eta = np.dot(X, beta)
+    pi = np.exp(eta) / (1 + np.exp(eta))
+
+    Y = np.random.binomial(1, pi)
+    return X, Y, beta, np.nonzero(active)[0], sigmaX
+
 
 def gaussian_instance(n=100,
                       p=200,
@@ -257,7 +534,7 @@ def logistic_instance(n=100,
     active = np.zeros(p, np.bool)
     active[beta != 0] = True
 
-    eta = linpred = np.dot(X, beta) 
+    eta = np.dot(X, beta)
     pi = np.exp(eta) / (1 + np.exp(eta))
 
     Y = np.random.binomial(1, pi)
