@@ -66,28 +66,28 @@ def test(seedn,
         signal = np.sqrt(signal_fac * 2 * np.log(p))
 
         if Gaussian is True:
-            inst = gaussian_instance
-
-            X, Y, beta = inst(n=n,
-                              p=p,
-                              signal=signal,
-                              s=s,
-                              equicorrelated=False,
-                              rho=rho,
-                              sigma=sigma,
-                              random_signs=True)[:3]
+            # inst = gaussian_instance
+            #
+            # X, Y, beta = inst(n=n,
+            #                   p=p,
+            #                   signal=signal,
+            #                   s=s,
+            #                   equicorrelated=False,
+            #                   rho=rho,
+            #                   sigma=sigma,
+            #                   random_signs=True)[:3]
 
             n_tuning = 1000
 
-            # X, Y, beta= gaussian_grouped_instance(n=n+ n_tuning,
-            #                                       p=p,
-            #                                       s=s,
-            #                                       sigma=sigma,
-            #                                       rho=rho,
-            #                                       signal=signal,
-            #                                       random_signs=True,
-            #                                       equicorrelated=True,
-            #                                       n_group=20)[:3]
+            X, Y, beta= gaussian_grouped_instance(n=n+ n_tuning,
+                                                  p=p,
+                                                  s=s,
+                                                  sigma=sigma,
+                                                  rho=rho,
+                                                  signal=signal,
+                                                  random_signs=True,
+                                                  equicorrelated=True,
+                                                  n_group=20)[:3]
 
             if n_tuning > 0:
                 X_tune = X[n:]  # used for tuning lambda
