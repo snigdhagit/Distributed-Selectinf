@@ -62,9 +62,7 @@ class multisplit_lasso(gaussian_query):
                                            solve_args=solve_args)
         self.beta_lasso = initial_solns
         _overall = np.sum(active, axis=1)
-<<<<<<< HEAD
-        overall = _overall>thre_agg
-=======
+
         overall = _overall > 0
 
         if aggregate is not None:
@@ -72,7 +70,6 @@ class multisplit_lasso(gaussian_query):
             overall = new_overall
 
         #print("selection summary ", _overall, overall)
->>>>>>> commit all changes
 
         nactive = overall.sum()
 
