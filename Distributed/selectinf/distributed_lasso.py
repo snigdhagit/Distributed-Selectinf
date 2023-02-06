@@ -48,7 +48,9 @@ class multisplit_lasso(gaussian_query):
         if sample_with_replacement:
             self.proportion = [proportion] * self.nsplit
 
+
     def fit(self,
+            aggregate=None,
             solve_args={'tol': 1.e-12, 'min_its': 50},
             perturb=None,
             thre_agg=0.):
@@ -60,7 +62,17 @@ class multisplit_lasso(gaussian_query):
                                            solve_args=solve_args)
         self.beta_lasso = initial_solns
         _overall = np.sum(active, axis=1)
+<<<<<<< HEAD
         overall = _overall>thre_agg
+=======
+        overall = _overall > 0
+
+        if aggregate is not None:
+            new_overall = aggregate(_overall)
+            overall = new_overall
+
+        #print("selection summary ", _overall, overall)
+>>>>>>> commit all changes
 
         nactive = overall.sum()
 
