@@ -68,7 +68,7 @@ def run(seedn,
             Y = Y[:n]
         sigma_ = np.std(Y)
         if n_tuning > 0:
-            weight_facs = np.linspace(.5, 5, 10) 
+            weight_facs = np.linspace(.5, 2, 20) 
             min_mse = np.Inf
             best_weight_fac = .5
             for weight_fac in weight_facs:
@@ -87,7 +87,8 @@ def run(seedn,
                     best_weight_fac = weight_fac
                     selector = selector_
                     signs = signs_
-            print(best_weight_fac)
+            print("threhold =", thre_agg, 'selected', np.sum(selector.overall), 'variables')
+            print('selected weight', best_weight_fac)
     else:
         inst = logistic_instance
         X, Y, beta = inst(n=n+n_tuning,
@@ -107,13 +108,13 @@ def run(seedn,
         feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) for i in range(nK - 1)}
         selector = L.logistic(X, Y, feature_weights, proportion)
         if n_tuning > 0:
-            weight_facs = np.linspace(0.1, 1, num=10)
+            weight_facs = np.linspace(0.1, 1, num=20)
             max_loglik = -np.Inf
             best_weight_fac = weight_facs[0]
             for weight_fac in weight_facs:
                 feature_weights = {i: np.ones(X.shape[1]) * np.sqrt(2 * np.log(p)) * weight_fac for i in range(nK - 1)}
                 selector_ = L.logistic(X, Y, feature_weights, proportion)
-                signs_ = selector_.fit()
+                signs_ = selector_.fit(thre_agg=thre_agg)
                 pi = X_tune @ selector_._beta_full
                 pi = 1 / (1 + np.exp(-pi))
                 loglik = np.sum(Y_tune * np.log(pi) + (1 - Y_tune) * np.log(1 - pi))
@@ -122,12 +123,12 @@ def run(seedn,
                     best_weight_fac = weight_fac
                     selector = selector_
                     signs = signs_
-            print(best_weight_fac)
+            print('selected weight', best_weight_fac)
 
     true_signal = beta != 0
     nonzero = signs != 0
-    print("threshold:", thre_agg)
-    print("dimensions", n, p, nonzero.sum())
+    # print("threshold:", thre_agg)
+    # print("dimensions", n, p, nonzero.sum())
 
     screening = sum(true_signal * nonzero) == sum(true_signal)
     # print("dimensions", n, p, nonzero.sum())
@@ -211,7 +212,7 @@ def run(seedn,
 
 
 def main(seed, sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac, logistic, n_tuning=0, root_dir='', thre_agg=0):
-    print(f"Starting simulation with K={nK}, n0={n0}, n1={n1}, p={p}, s={s}, signal_fac={signal_fac}, weight_fac={weight_fac}")
+    print(f"Starting simulation with K={nK}, n0={n0}, n1={n1}, p={p}, s={s}, signal_fac={signal_fac}, thre_agg={thre_agg}")
     nsim = 1
     print_every = 1
     methods = ['dist_carving', 'splitting', 'naive']
@@ -228,16 +229,18 @@ def main(seed, sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac
     else:
         n = int((nK - 1) * n1 + n0)
         proportion = np.ones(nK - 1) * (n1 / n)
-        print(n, p, proportion)
+        # print(n, p, proportion)
 
     for i in range(1):
         coverages, lengths, metrics, screening = run(seedn=seed, n=n, p=p, nK=nK, sigma=1., signal_fac=signal_fac, rho=0.9, s=s, proportion=proportion, sample_with_replacement=sample_with_replacement, weight_fac=weight_fac, logistic=logistic, n_tuning=n_tuning, thre_agg=thre_agg)
-        if coverages is not None:
-            methods = coverages.keys()
-            [coverages_[key].append(coverages[key]) for key in methods]
-            [lengths_[key].append(lengths[key]) for key in methods]
-            [metrics_[key].append([metrics[key]]) for key in methods]
-            screening_.append(screening)
+        if coverages is None:
+            return
+
+        methods = coverages.keys()
+        [coverages_[key].append(coverages[key]) for key in methods]
+        [lengths_[key].append(lengths[key]) for key in methods]
+        [metrics_[key].append([metrics[key]]) for key in methods]
+        screening_.append(screening)
 
         # if (i + 1) % print_every == 0 or i == nsim - 1:
         # mean_cover = {}
@@ -247,12 +250,15 @@ def main(seed, sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac
         # print(pd.DataFrame(mean_cover, index=['coverage', 'length']))
         df_cover = pd.DataFrame(coverages).mean()
         df_len = pd.DataFrame(lengths).mean()
-        print(df_cover)
+        # print(df_cover)
         df_metrics = pd.DataFrame(metrics, index=['precision', 'recall', 'f1'])
         df = pd.concat([df_cover, df_len, df_metrics.T], 1)
+        df['num_selected'] = len(coverages['naive'])
+        df['screening'] = screening
+        print(df)
         
         if root_dir == '':
-            root_dir = 'Distributed/selectinf/simulations/results'
+            root_dir = 'Distributed/selectinf/simulations/results2'
         os.makedirs(root_dir, exist_ok=True)
         if n_tuning > 0:
             filename = f"K_{nK}_n0_{n0}_n1_{n1}_p_{p}_s_{s}_signal_{signal_fac}_ntune_{n_tuning}_thre_{thre_agg}_seed_{seed}"
@@ -265,6 +271,7 @@ def main(seed, sample_with_replacement, nK, n0, n1, p, s, signal_fac, weight_fac
         else:
             filename = os.path.join(root_dir, f'one_pass_without_replace_{filename}.csv')
         df.to_csv(filename)
+        print("Saved to", filename)
         # all_results = {'coverages': coverages_, 'lengths': lengths_, 'metrics': metrics_, 'screening': screening_}
         # with open(filename, 'wb') as f:
             # pickle.dump(all_results, f)
@@ -291,11 +298,12 @@ if __name__ == "__main__":
     nK = args.K
     # signals = np.linspace(0.5, 2, num=6)
     # signals = np.linspace(0.1, 0.9, 5)
-    signal_fac = .1
+    signal_fac = 1.
 
-    n1 = 8000 // (nK - 1)
-    for thre_agg in range(nK):
-        main(args.seed, args.w_replace, nK, n0, n1, p, s, signal_fac, weight_fac, args.logistic, 1000, root_dir=args.root_dir, thre_agg=thre_agg)
+    # n1 = 8000 // (nK - 1)
+    n1 = 2000
+    for thre_agg in range((nK - 1) // 2):
+        main(args.seed, args.w_replace, nK, n0, n1, p, s, signal_fac, weight_fac, args.logistic, n_tuning=2000, root_dir=args.root_dir, thre_agg=thre_agg)
     
     # len(K_list) * len(signals) * len(n0_list) * len(s_list) * len(weight_facs)
 
