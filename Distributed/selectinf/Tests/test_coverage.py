@@ -79,7 +79,7 @@ def test(seedn,
 
             n_tuning = 1000
 
-            X, Y, beta= gaussian_grouped_instance(n=n+ n_tuning,
+            X, Y, beta= gaussian_grouped_instance(n=n+n_tuning,
                                                   p=p,
                                                   s=s,
                                                   sigma=sigma,

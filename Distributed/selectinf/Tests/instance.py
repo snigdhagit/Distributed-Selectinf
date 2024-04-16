@@ -43,7 +43,8 @@ def gaussian_grouped_instance(n=100,
                               scale=True,
                               center=True,
                               equicorrelated=True,
-                              n_group=20):
+                              n_group=20,
+                              one_per_group=False):
 
     """
     A testing instance for the LASSO.
@@ -153,7 +154,14 @@ def gaussian_grouped_instance(n=100,
     beta = np.zeros(p)
     group_labels = np.unique(groups)
     group_active = np.random.choice(group_labels, s, replace=False)
-    active = np.isin(groups, group_active)
+    if not one_per_group:
+        active = np.isin(groups, group_active)
+    else:
+        active = np.zeros(p, dtype=bool)
+        for g in group_active:
+            tmp = np.where(groups == g)[0]
+            idx = np.random.choice(tmp, 1)
+            active[idx] = True
 
     signal = np.atleast_1d(signal)
     beta[active] = signal[0]
@@ -161,7 +169,7 @@ def gaussian_grouped_instance(n=100,
     if random_signs:
         beta[active] *= (2 * np.random.binomial(1, 0.5, size=(active.sum(),)) - 1.)
 
-    np.random.shuffle(beta)
+    # np.random.shuffle(beta)
     beta /= np.sqrt(n)
 
     if scale:
