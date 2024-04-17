@@ -52,8 +52,7 @@ class multisplit_lasso(gaussian_query):
     def fit(self,
             aggregate=None,
             solve_args={'tol': 1.e-12, 'min_its': 50},
-            perturb=None,
-            thre_agg=0.):
+            perturb=None):
 
         (initial_solns,
          initial_subgrads,

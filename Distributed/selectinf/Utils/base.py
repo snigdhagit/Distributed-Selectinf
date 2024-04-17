@@ -1,7 +1,8 @@
 import numpy as np
-
+from collections import namedtuple
 import regreg.api as rr
 import regreg.affine as ra
+
 
 def restricted_estimator(loss, active, solve_args={'min_its':50, 'tol':1.e-10}):
     """
@@ -39,6 +40,21 @@ def restricted_estimator(loss, active, solve_args={'min_its':50, 'tol':1.e-10}):
     return beta_E
 
 
+def logistic_target_restricted(linpred, X, active):
+
+    def pi(x):
+        return 1 / (1 + np.exp(-x))
+
+    Y_mean = pi(linpred)
+    n = X.shape[0]
+
+    loglike = rr.glm.logistic(X, successes=Y_mean, trials=np.ones(n))
+
+    _beta_unpenalized = restricted_estimator(loglike,
+                                             active)
+    return _beta_unpenalized
+
+
 def _compute_hessian(loglike,
                      beta_bar,
                      *bool_indices):
@@ -74,6 +90,7 @@ def _compute_hessian(loglike,
     else:
         return _hessian
 
+
 def _pearsonX2(y,
                linpred,
                loglike,
@@ -83,6 +100,7 @@ def _pearsonX2(y,
     n = y.shape[0]
     resid = y - loglike.saturated_loss.mean_function(linpred)
     return (resid ** 2 / W).sum() / (n - df_fit)
+
 
 def target_query_Interactspec(query_spec,
                               regress_target_score,
@@ -98,3 +116,35 @@ def target_query_Interactspec(query_spec,
     U5 = U1.T.dot(QS.M1.dot(QS.opt_linear))
 
     return U1, U2, U3, U4, U5
+
+
+def aggregate_shavegroups(_overall):
+
+    group_size = 5
+    ngroup = 20
+
+    groups = np.arange(ngroup).repeat(group_size)
+
+    overall = _overall > 0
+    new_overall = np.zeros(overall.shape[0], np.bool)
+    for g in sorted(np.unique(groups)):
+
+        srt = group_size * g
+        stp = group_size * (g + 1)
+        if overall[srt:stp].sum() > 0:
+            rep = np.random.choice(group_size, 1, replace=False)
+            new_overall[rep + srt] = True
+
+    return new_overall
+
+
+Metrics = namedtuple('Metrics', ['TP', 'TN', 'FP', 'FN', 'F1', 'DOR'])
+def get_metrics(beta_target, reject):
+    accept = ~reject
+    tp = np.sum(reject * (beta_target != 0))
+    tn = np.sum(accept * (beta_target == 0))
+    fp = np.sum(reject * (beta_target == 0))
+    fn = np.sum(accept * (beta_target != 0))
+    f1_score = 2 * tp / (2 * tp + fp + fn)
+    dor = (tp * tn) / (fp * fn)
+    return Metrics(tp, tn, fp, fn, f1_score, dor)
