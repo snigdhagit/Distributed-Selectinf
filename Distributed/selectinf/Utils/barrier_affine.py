@@ -10,7 +10,7 @@ def solve_barrier_affine_py(conjugate_arg,
                             min_its=200,
                             tol=1.e-10):
 
-    scaling = np.sqrt(np.diag(con_linear.dot(precision).dot(con_linear.T)))
+    scaling = np.sqrt(np.clip(np.diag(con_linear.dot(precision).dot(con_linear.T)), 1e-6, np.inf))
 
     if feasible_point is None:
         feasible_point = 1. / scaling
@@ -27,6 +27,8 @@ def solve_barrier_affine_py(conjugate_arg,
 
     for itercount in range(nstep):
         cur_grad = grad(current)
+        if np.isnan(cur_grad).any():
+            raise ValueError('gradient is NaN')
 
         # make sure proposal is feasible
 
@@ -37,7 +39,7 @@ def solve_barrier_affine_py(conjugate_arg,
             if np.all(con_offset-con_linear.dot(proposal) > 0):
                 break
             step *= 0.5
-            if count >= 40:
+            if count >= 100: #40:
                 raise ValueError('not finding a feasible point')
 
         # make sure proposal is a descent
